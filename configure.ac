@@ -3,13 +3,11 @@
 
 AC_INIT(
 	[ising],
-	[0.0],
-	[truemerrill@gmail.com]
-)
+	[0.1],
+	[truemerrill@gmail.com])
 AM_INIT_AUTOMAKE([-Wall -Werror foreign])
-AM_PROG_CC
-
-
+AC_PROG_CC
+AC_CONFIG_HEADERS([config.h])
 AC_CONFIG_FILES([
 	Makefile
 	src/Makefile
