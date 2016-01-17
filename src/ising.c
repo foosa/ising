@@ -10,14 +10,15 @@
 
 #include <stdlib.h>
 #include <math.h>
+#include <assert.h>
 #include "ising.h"
 #include "log.h"
 
 
-ising_t * ising_alloc (size_t rows, size_t cols)
+ising_t * ising_alloc (size_t rows, size_t cols, double H, double J,
+	double beta)
 {
 	ising_t *im;
-	size_t i;
 
 	im = malloc(sizeof(ising_t));
 	im->rows = rows;
@@ -25,10 +26,13 @@ ising_t * ising_alloc (size_t rows, size_t cols)
 	im->size = rows * cols;
 	im->data = malloc(sizeof(int) * im->size);
 
-	// Set all of the spins to be spin down ...
-	for (i = 0; i < im->size; i++) {
-		im->data[i] = -1;
-	}
+	// Set default values ...	
+	im->J = J;
+	im->H = H;
+	im->beta = beta;
+
+	// Randomize spins ...
+	ising_randomize(im);
 
 	return im;
 }
@@ -50,13 +54,19 @@ void ising_free (ising_t *im)
  */
 size_t index_wrap (int max, int index)
 {
+	size_t idx;
 	while (index < 0) {
 		index += max;
 	}
-	while (index > max) {
+	while (index >= max) {
 		index -= max;
 	}
-	return index;
+
+	// Assert index is in bounds
+	assert(index < max);
+	assert(index >= 0);
+	idx = (size_t) index;
+	return idx;
 }
 
 
@@ -69,6 +79,10 @@ size_t ising_index (const ising_t *im, int row, int col)
 	col = index_wrap(im->cols, col);
 	index = row + im->rows * col;
 
+	// Assert index is in bounds
+	assert(index < im->size);
+	assert(index >= 0);
+
 	return index;
 }
 
@@ -76,10 +90,20 @@ size_t ising_index (const ising_t *im, int row, int col)
 void ising_set (ising_t *im, int row, int col, int spin)
 {
 	size_t index;
+	double delta;
 
 	if ((spin == 1) ||  (spin == -1)) {
 		index = ising_index(im, row, col);
-		im->data[index] = spin;
+		
+		// Update the energy and mag parameters
+		if (im->data[index] != spin) {
+			delta = ising_delta(im, row, col);
+			im->energy += delta;
+			im->mag += 2 * spin;
+			im->data[index] = spin;
+		}
+
+		// Otherwise the spin remains the same
 	}
 	else {
 		error("Invalid spin value %d", spin);
@@ -89,8 +113,8 @@ void ising_set (ising_t *im, int row, int col, int spin)
 
 void ising_flip (ising_t *im, int row, int col)
 {
-	size_t index = ising_index(im, row, col);
-	im->data[index] *= -1;
+	int spin = ising_get(im, row, col);
+	ising_set(im, row, col, - spin);
 }
 
 
@@ -113,154 +137,124 @@ int ising_neighbor (const ising_t *im, int row, int col)
 }
 
 
-void ising_randomize (ising_t *im)
+/**
+ * @brief Calculates the lattice energy and magnetization and stores the
+ * resultant in im->energy and im->mag.  This function iterates over all
+ * lattice sites, and should not be used frequently to avoid overhead issues.
+ *
+ * @param im pointer to an Ising lattice
+ */
+void ising_calculate (ising_t *im)
 {
-	double p;
-	size_t i, j;
+	int i, j, mag;
+	double energy;
+
+	energy = 0;
+	mag = 0;
 
 	for (i = 0; i < im->rows; i++) {
 		for (j = 0; j < im->cols; j++) {
-			p = ((double) rand()) / RAND_MAX;
-			if (p > 0.5) {
-				ising_flip(im, i, j);
-			}
+			energy += ising_site_energy(im, i, j);
+			mag += ising_get(im, i, j);
 		}
 	}
+
+	im->energy = energy;
+	im->mag = mag;
 }
 
-/*
-ising_problem_t * ising_problem_alloc (size_t history)
+
+void ising_randomize (ising_t *im)
 {
-	ising_problem_t *ip;
-	ip = malloc(sizeof(ising_problem_t));
+	double p;
+	size_t i;
 
-	// Allocate storage for history only if the user asked us for it
-	if (history > 0) {
-		ip->E = malloc(sizeof(double) * history);
-	}
-	else {
-		ip-> = NULL;
+	for (i = 0; i < im->size; i++) {
+		p = ((double) rand()) / RAND_MAX;
+
+		if (p > 0.5) {
+			im->data[i] = 1;
+		}
+
+		else {
+			im->data[i] = -1;
+		}
 	}
 
-	ip->J = 0;
-	ip->H = 0;
-	ip->beta = 0;
-	ip->history = history;
-	return ip;
+	ising_calculate(im);
 }
 
 
-void ising_problem_free (ising_problem_t *ip)
-{
-	free(ip->E);
-	free(ip);
-}
-*/
-
-double ising_site_energy (const ising_t *im, const ising_problem_t *ip,
-	int row, int col)
+double ising_site_energy (const ising_t *im, int row, int col)
 {
 	int spin, neighbors;
 	double energy;
 
 	spin = ising_get(im, row, col);
 	neighbors = ising_neighbor(im, row, col);
-	energy = - ip->H * spin - ip->J * (spin * neighbors);
+	energy = - (im->H * spin) - (im->J * (spin * neighbors));
+
 	return energy;
 }
 
 
-double ising_energy (const ising_t *im, const ising_problem_t *ip)
+double ising_delta (const ising_t *im, int row, int col)
 {
-	int i, j;
-	double energy;
+	int spin, neighbors;
+	double e_start, e_finish, delta;
 
-	energy = 0;
-	for (i = 0; i < im->rows; i++) {
-		for (j = 0; j < im->cols; j++) {
-			energy += ising_site_energy(im, ip, i, j);
-		}
-	}
-
-	energy = energy / (double) im->size;
-	return energy;
-}
-
-
-double ising_magnetization (const ising_t *im, const ising_problem_t *ip)
-{
-	int i, j;
-	double mag;
-
-	mag = 0;
-	for (i = 0; i < im->rows; i++) {
-		for (j = 0; j < im->cols; j++) {
-			mag += ising_get(im, i, j);
-		}
-	}
-
-	mag = mag / im->size;
-	return mag;
-}
-
-
-void ising_metropolis_step (ising_t *im, const ising_problem_t *ip,
-	int row, int col)
-{
-	double e_start, e_finish, delta, r, p;
-	
-	// Calculate the energy from flipping the site
-	e_start = ising_site_energy(im, ip, row, col);
-	ising_flip(im, row, col);
-	e_finish = ising_site_energy(im, ip, row, col);
+	spin = ising_get(im, row, col);
+	neighbors = ising_neighbor(im, row, col);
+	e_start = - (im->H * spin) - (im->J * (spin * neighbors));
+	spin *= -1;
+	e_finish = - (im->H * spin) - (im->J * (spin * neighbors));
 	delta = e_finish - e_start;
+	
+	return delta;
+}
 
-	if (delta > 0) {
-		p = exp(-ip->beta * delta);
+
+double ising_energy (const ising_t *im)
+{
+	return im->energy;
+}
+
+
+int ising_magnetization (const ising_t *im)
+{
+	return im->mag;
+}
+
+
+void ising_metropolis_step (ising_t *im, int row, int col)
+{
+	double delta, r, p;
+
+	// Calculate the energy from flipping the site
+	delta = ising_delta(im, row, col);
+
+	if (delta >= 0) {
+		p = exp(-im->beta * delta);
 		r = ((double) rand()) / RAND_MAX;
-		if (r > p) {
-			// Reject spin flip
+		
+		if (r < p) {
+			// Accept spin flip
 			ising_flip(im, row, col);
 		}
 	}
+	
+	else {
+		// Accept spin flip
+		ising_flip(im, row, col);
+	}
 }
 
 
-void ising_metropolis (ising_t *im, const ising_problem_t *ip)
+void ising_metropolis (ising_t *im)
 {
 	int row, col;
 	row = rand() % im->rows;
 	col = rand() % im->cols;
-	ising_metropolis_step(im, ip, row, col);
+	ising_metropolis_step(im, row, col);
 }
 
-/*
-int ising_main (const char *path)
-{
-	ising_t *im;
-	ising_problem_t = ip;
-	json_t *root, *rows, *cols, *J, *H, *beta;
-	json_error_t err;
-
-	// Parse the input file
-	root = json_load_file(path, 0, &err);
-	rows = json_object_get(root, "rows");
-	cols = json_object_get(root, "cols");
-	im = ising_alloc(json_integer_value(rows), json_integer_value(cols));
-
-	// These are the scannable variables.  They each have to be arrays...
-	J = json_object_get(root, "J");
-	H = json_object_get(root, "H");
-	beta = json_object_get(root, "beta");
-
-	
-
-	// Free JSON related data structures
-	json_decref(beta);
-	json_decref(H);
-	json_decref(J);
-	json_decref(cols);
-	json_decref(rows);
-	json_decref(root);
-}
-*/
