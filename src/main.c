@@ -128,8 +128,8 @@ const char *header = ""
 "    888  o.  )88b  888   888   888  `88bod8P'  \n"
 "   o888o 8\"\"888P' o888o o888o o888o `8oooooo.  \n"
 "                                    d\"     YD  \n"
-"Copyright (c) 2016 True Merrill     \"Y88888P'  \n"
-"All rights reserved                            \n";
+"                                    \"Y88888P'  \n"
+"\n";
 
 
 /**
