@@ -11,47 +11,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <jansson.h>
-#include "log.h"
+//#include "log.h"
 #include "ising.h"
-
-
-struct ising_job_params
-{
-	size_t rows;
-	size_t cols;
-	double J;
-	double H;
-	double beta;
-	size_t steps;
-};
-
-
-/**
- * @brief Callback function to be called for every job
- *
- * @param params
- */
-void ising_job_callback (void *params)
-{
-	struct ising_job_params *p;
-	ising_t *im;
-	size_t step;
-	double avg_energy, avg_mag, temp;
-
-	p = (struct ising_job_params *) params;
-	im = ising_alloc(p->rows, p->cols, p->H, p->J, p->beta);
-
-	for (step = 0; step < p->steps; step++) {
-		avg_energy = im->energy / im->size;
-		avg_mag = ((double) im->mag) / im->size;
-		temp = 1 / im->beta;
-		printf("%lu, %lu, % .10f, % .10f, % .10f\n", step, im->size, avg_energy,
-			avg_mag, temp);
-		ising_metropolis(im);
-	}
-
-	ising_free(im);
-}
 
 
 /**
@@ -62,13 +23,16 @@ void ising_job_callback (void *params)
  * @param field field key for the child
  * @param type JSON type
  */
-void parse_input_field (json_t *root, json_t **output, const char *field,
-	json_type type)
+json_t * parse_input_field (json_t *root, const char *field, json_type type)
 {
+	json_t * output;
 	char *type_name = NULL;
 
 	if (type == JSON_INTEGER) {
 		type_name = "integer";
+	}
+	else if (type == JSON_REAL) {
+		type_name = "real";
 	}
 	else if (type == JSON_ARRAY) {
 		type_name = "array";
@@ -77,14 +41,14 @@ void parse_input_field (json_t *root, json_t **output, const char *field,
 		type_name = "object";
 	}
 
-	*output = json_object_get(root, field);
-	if (!(*output)) {
+	output = json_object_get(root, field);
+	if (!(output)) {
 		fprintf(stderr, "error: input missing required field %s\n", field);
 		json_decref(root);
 		exit(-1);
 	}
 
-	if (json_typeof(*output) != type) {
+	if (json_typeof(output) != type) {
 
 		if (type_name) {
 			fprintf(stderr, "error: input field %s is not of type %s\n", field,
@@ -98,24 +62,17 @@ void parse_input_field (json_t *root, json_t **output, const char *field,
 		json_decref(root);
 		exit(-1);
 	}
+
+	return output;
 }
 
 
 void run (const char *filename)
 {
-	json_t *root, *rows, *cols, *steps, *H, *J, *beta, *value;
+	json_t *root, *rows, *cols, *steps, *H, *J, *beta;
 	json_error_t err;
-	size_t index;
-	struct ising_job_params params;
-
-	// Initialize json_t's to NULL
-	root = NULL;
-	rows = NULL;
-	cols = NULL;
-	steps = NULL;
-	H = NULL;
-	J = NULL;
-	beta = NULL;
+	ising_t *im;
+	size_t step, s;
 
 	// Parse the file and construct the root object
 	root = json_load_file(filename, 0, &err);
@@ -131,32 +88,30 @@ void run (const char *filename)
 	}
 
 	// Parse each of the required input fields
-	parse_input_field(root, &rows, "rows", JSON_INTEGER);
-	parse_input_field(root, &cols, "cols", JSON_INTEGER);
-	parse_input_field(root, &H, "H", JSON_ARRAY);
-	parse_input_field(root, &J, "J", JSON_ARRAY);
-	parse_input_field(root, &beta, "beta", JSON_ARRAY);
-	parse_input_field(root, &steps, "steps", JSON_ARRAY);
+	rows = parse_input_field(root, "rows", JSON_INTEGER);
+	cols = parse_input_field(root, "cols", JSON_INTEGER);
+	H = parse_input_field(root, "H", JSON_REAL);
+	J = parse_input_field(root, "J", JSON_REAL);
+	beta = parse_input_field(root, "beta", JSON_REAL);
+	steps = parse_input_field(root, "steps", JSON_INTEGER);
 
-	params.rows = (size_t) json_integer_value(rows);
-	params.cols = (size_t) json_integer_value(cols);
+	// Allocate the ising model
+	im = ising_alloc(
+			(size_t) json_integer_value(rows),
+			(size_t) json_integer_value(cols),
+			json_real_value(H),
+			json_real_value(J),
+			json_real_value(beta)
+		);
 
-	json_array_foreach (H, index, value) {
-		params.H = json_real_value(value);
-		json_array_foreach (J, index, value) {
-			params.J = json_real_value(value);
-			json_array_foreach (beta, index, value) {
-				params.beta = json_real_value(value);
-				json_array_foreach (steps, index, value) {
-					params.steps = (size_t) json_integer_value(value);
-
-					// Run the job
-					ising_job_callback(&params);
-				}
-			}
-		}
+	s = (size_t) json_integer_value(steps);
+	for (step = 0; step < s; step++) {
+		printf("%lu, %lu, % .10f, % i, % .10f\n", step, im->size,
+			im->energy, im->mag, im->beta);
+		ising_metropolis(im);
 	}
 
+	ising_free(im);
 	json_decref(root);
 }
 
